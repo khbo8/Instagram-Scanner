@@ -1,317 +1,179 @@
 import requests
-import uuid
-import time
 import random
-import json
 import string
-import re
+import json
 import os
-import base64
-import secrets
-from datetime import datetime
+import sys
+import time
 
-# ========= متغيرات من Environment =========
+# ------------- Configuration -------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+MIN_LEN = 5
+MAX_LEN = 9
+# -----------------------------------------
 
-# ========= عداد =========
-hits = 0
-good = 0
-bad = 0
-total_checked = 0
-found_accounts = []
+def log(msg):
+    print(f"[LOG] {msg}", flush=True)
 
-# ========= جلسات =========
-session = requests.Session()
-google_session = requests.Session()
+def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        log("❌ TELEGRAM SECRETS NOT SET! Check BOT_TOKEN and CHAT_ID in GitHub Secrets.")
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=15)
+        if r.status_code == 200:
+            log("✅ Telegram message sent successfully")
+            return True
+        else:
+            log(f"❌ Telegram API error: {r.status_code} - {r.text[:200]}")
+            return False
+    except Exception as e:
+        log(f"❌ Telegram send exception: {e}")
+        return False
 
-# ========= ثوابت =========
-IG_APP_ID = "936619743392459"
-IG_ANDROID_UA = "Instagram 370.1.0.43.96 Android (34/14; 450dpi; 1080x2207; samsung; SM-A235F; a23; qcom; en_IN; 704872281)"
-
-# ========= قوائم لتوليد يوزرات واقعية =========
-FIRST_NAMES = [
-    "ahmed", "mohamed", "omar", "ali", "hassan", "hussain", "abdullah", "khaled",
-    "youssef", "mahmoud", "mostafa", "ibrahim", "salah", "tamer", "nasser", "gamal",
-    "john", "michael", "david", "james", "robert", "william", "daniel", "matthew",
-    "sarah", "emma", "olivia", "ava", "sophia", "isabella", "mia", "charlotte",
-    "lina", "noor", "sara", "mariam", "fatima", "haya", "layla", "amira",
-    "kim", "lisa", "jennie", "jisoo", "rose", "jennifer", "jessica", "taylor"
-]
-
-LAST_NAMES = [
-    "smith", "johnson", "williams", "brown", "jones", "garcia", "miller", "davis",
-    "ali", "hassan", "hussein", "ahmed", "omar", "khaled", "mostafa", "salah",
-    "kim", "park", "choi", "jung", "lee", "kang", "yoon", "jang"
-]
-
-INTERESTS = [
-    "dev", "coder", "gamer", "pro", "king", "queen", "star", "life",
-    "art", "photography", "travel", "music", "fitness", "food", "soccer",
-    "real", "official", "world", "love", "happy", "fun", "cool", "vibe"
-]
-
-def random_username():
-    """توليد يوزر انستغرام عشوائي واقعي"""
+def generate_username():
     patterns = [
-        # اسم + أرقام
-        lambda: random.choice(FIRST_NAMES) + str(random.randint(1, 9999)),
-        # اسم_اسم
-        lambda: random.choice(FIRST_NAMES) + "_" + random.choice(LAST_NAMES),
-        # اسم + اهتمام
-        lambda: random.choice(FIRST_NAMES) + "." + random.choice(INTERESTS),
-        # نقطة بين الأسماء
-        lambda: random.choice(FIRST_NAMES) + "." + random.choice(LAST_NAMES),
-        # كلها أحرف صغيرة
-        lambda: ''.join(random.choices(string.ascii_lowercase, k=random.randint(6, 12))),
-        # أحرف + أرقام
-        lambda: ''.join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(7, 11))),
-        # اسم + 3 أرقام
-        lambda: random.choice(FIRST_NAMES) + str(random.randint(100, 999)),
-        # تحت سطر + كلمة
-        lambda: "_" + random.choice(INTERESTS) + str(random.randint(10, 99)),
+        lambda: random.choice(["the", "im", "its", "mr", "ms", "itz"]) + random.choice(string.ascii_lowercase) + ''.join(random.choices(string.ascii_lowercase, k=random.randint(3,6))),
+        lambda: ''.join(random.choices(string.ascii_lowercase, k=random.randint(5, 8))) + str(random.randint(1, 999)),
+        lambda: random.choice(["x", "z", "v"]) + ''.join(random.choices(string.ascii_lowercase, k=random.randint(4,7))) + str(random.randint(10, 99)),
+        lambda: ''.join(random.choices(string.ascii_lowercase, k=random.randint(6, 9))) + random.choice(["_", "", ""]) + random.choice(["official", "real", "king", "lol", "pro", ""]),
     ]
     return random.choice(patterns)()
 
-def get_user_info(username):
-    """جلب معلومات حساب انستغرام"""
+def check_instagram(username):
+    """Try multiple methods to get Instagram account info"""
+    # Method 1: Public API (www.instagram.com/{username}/?__a=1)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/html, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+    }
+    
+    # Method A: __a=1 API
     try:
-        headers = {
-            'User-Agent': f"Instagram {random.randint(200,370)}.0.0.{random.randint(10,99)}.{random.randint(100,999)} Android (34/14; 450dpi; 1080x2207; samsung; SM-A235F; qcom; en_IN; {random.randint(100000000,999999999)})",
-            'x-ig-app-id': IG_APP_ID,
-        }
-        url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
-        response = session.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            user = data.get('data', {}).get('user', {})
-            if user and user.get('username'):
+        url = f"https://www.instagram.com/{username}/?__a=1"
+        r = requests.get(url, headers=headers, timeout=10)
+        log(f"  Method A ({username}): Status {r.status_code}")
+        if r.status_code == 200:
+            data = r.json()
+            user_data = data.get("graphql", {}).get("user", {}) or data.get("user", {})
+            if user_data and user_data.get("username", "").lower() == username.lower():
                 return {
-                    'pk': user.get('id'),
-                    'username': user.get('username'),
-                    'full_name': user.get('full_name', ''),
-                    'follower_count': user.get('edge_followed_by', {}).get('count', 0),
-                    'following_count': user.get('edge_follow', {}).get('count', 0),
-                    'media_count': user.get('edge_owner_to_timeline_media', {}).get('count', 0),
-                    'is_private': user.get('is_private', False),
-                    'is_business': user.get('is_business_account', False),
-                    'biography': user.get('biography', ''),
-                    'profile_pic_url': user.get('profile_pic_url', ''),
-                    'external_url': user.get('external_url', ''),
+                    "username": user_data.get("username"),
+                    "full_name": user_data.get("full_name"),
+                    "bio": user_data.get("biography", ""),
+                    "email": user_data.get("business_email") or user_data.get("contact_phone_number", "") or "N/A",
+                    "followers": user_data.get("edge_followed_by", {}).get("count", 0),
+                    "following": user_data.get("edge_follow", {}).get("count", 0),
+                    "is_private": user_data.get("is_private", False),
+                    "is_business": user_data.get("is_business_account", False),
+                    "verified": user_data.get("is_verified", False),
+                    "profile_pic": user_data.get("profile_pic_url_hd", ""),
                 }
-        return None
-    except:
-        return None
-
-def search_email_for_username(username):
-    """البحث عن الإيميل المرتبط بحساب انستغرام"""
-    try:
-        android_id = "android-" + secrets.token_hex(8)
-        device_id = str(uuid.uuid4())
-        family_id = str(uuid.uuid4())
-        
-        url = "https://i.instagram.com/api/v1/bloks/async_action/com.bloks.www.caa.ar.search.async/"
-        
-        payload = {
-            'params': json.dumps({
-                "client_input_params": {
-                    "aac": json.dumps({
-                        "aac_init_timestamp": int(time.time()),
-                        "aacjid": str(uuid.uuid4()),
-                        "aaccs": secrets.token_urlsafe(32)
-                    }),
-                    "search_query": username,
-                    "search_screen_type": "email_or_username",
-                    "is_whatsapp_installed": 1,
-                    "fetched_email_list": []
-                },
-                "server_params": {
-                    "event_request_id": str(uuid.uuid4()),
-                    "device_id": android_id,
-                    "family_device_id": family_id,
-                    "waterfall_id": str(uuid.uuid4()),
-                    "login_surface": "login_home",
-                    "access_flow_version": "pre_mt_behavior"
-                }
-            }),
-            'bk_client_context': json.dumps({
-                "bloks_version": "5e47baf35c5a270b44c8906c8b99063564b30ef69779f3dee0b828bee2e4ef5b",
-                "styles_id": "instagram"
-            }),
-            'bloks_versioning_id': "5e47baf35c5a270b44c8906c8b99063564b30ef69779f3dee0b828bee2e4ef5b"
-        }
-        
-        headers = {
-            'User-Agent': IG_ANDROID_UA,
-            'accept-language': 'en-IN, en-US',
-            'x-bloks-version-id': '5e47baf35c5a270b44c8906c8b99063564b30ef69779f3dee0b828bee2e4ef5b',
-            'x-fb-friendly-name': 'IgApi: bloks/async_action/com.bloks.www.caa.ar.search.async/',
-            'x-ig-android-id': android_id,
-            'x-ig-app-id': '567067343352427',
-            'x-ig-device-id': device_id,
-            'x-ig-family-device-id': family_id,
-            'x-ig-timezone-offset': str(datetime.now().astimezone().utcoffset().total_seconds()),
-            'x-mid': base64.urlsafe_b64encode(secrets.token_bytes(18)).decode().rstrip('='),
-            'x-pigeon-rawclienttime': str(time.time()),
-            'x-pigeon-session-id': f"UFS-{uuid.uuid4()}-0",
-        }
-        
-        response = requests.post(url, data=payload, headers=headers, timeout=15)
-        
-        if response.status_code == 200 and username.lower() in response.text.lower():
-            # نبحث عن إيميل في الرد
-            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-            emails = re.findall(email_pattern, response.text)
-            for email in emails:
-                if 'gmail' in email or 'yahoo' in email or 'outlook' in email:
-                    return email
-            # إذا ما لقينا إيميل صريح، نرجّع اليوزر كإيميل
-            return f"{username}@gmail.com"
-        
-        return None
-    except:
-        return None
-
-def send_to_telegram(account_info):
-    """إرسال النتائج إلى تيليجرام"""
-    if not BOT_TOKEN or not CHAT_ID:
-        print("  ⚠️ BOT_TOKEN أو CHAT_ID غير مضبوطين")
-        return False
-    
-    try:
-        msg = f"""
-📱 **حساب انستغرام موجود!**
-━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-**اليوزرنيم:** @{account_info.get('username', '')}
-**الاسم:** {account_info.get('full_name', 'غير معروف')}
-**الإيميل:** {account_info.get('email', 'غير معروف')}
-**المتابعين:** {account_info.get('followers', 0):,}
-**يتابع:** {account_info.get('following', 0):,}
-**المنشورات:** {account_info.get('posts', 0):,}
-**خاص:** {'🔒 نعم' if account_info.get('is_private') else '🔓 لا'}
-**السيرة:** {account_info.get('biography', 'فارغة')[:100]}
-━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-🔗 https://www.instagram.com/{account_info.get('username', '')}
-"""
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={
-            'chat_id': CHAT_ID,
-            'text': msg,
-            'parse_mode': 'Markdown'
-        }, timeout=10)
-        return True
     except Exception as e:
-        print(f"  ⚠️ فشل الإرسال إلى تيليجرام: {e}")
-        return False
+        log(f"  Method A failed: {e}")
+    
+    # Method B: Direct page scrape (no __a=1)
+    try:
+        url = f"https://www.instagram.com/{username}/"
+        r = requests.get(url, headers=headers, timeout=10)
+        log(f"  Method B ({username}): Status {r.status_code}, Length: {len(r.text)}")
+        if r.status_code == 200 and "window.__INITIAL_STATE__" in r.text:
+            import re
+            match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?});\s*\(function', r.text, re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                user_data = data.get("user", {})
+                if user_data:
+                    return {
+                        "username": user_data.get("username"),
+                        "full_name": user_data.get("full_name"),
+                        "bio": user_data.get("biography", ""),
+                        "email": user_data.get("business_email", "N/A"),
+                        "followers": user_data.get("edge_followed_by", {}).get("count", 0),
+                        "following": user_data.get("edge_follow", {}).get("count", 0),
+                        "is_private": user_data.get("is_private", False),
+                        "is_business": user_data.get("is_business_account", False),
+                        "verified": user_data.get("is_verified", False),
+                        "profile_pic": "",
+                    }
+    except Exception as e:
+        log(f"  Method B failed: {e}")
+    
+    return None
 
-def scan_random_usernames(count=20):
-    """فحص يوزرات عشوائية مولّدة"""
-    global hits, good, bad, total_checked, found_accounts
+def main():
+    log("=" * 50)
+    log("INSTAGRAM RANDOM SCANNER STARTED")
+    log(f"Python version: {sys.version}")
+    log(f"BOT_TOKEN set: {'YES' if BOT_TOKEN else 'NO'}")
+    log(f"CHAT_ID set: {'YES' if CHAT_ID else 'NO'}")
+    log("=" * 50)
     
-    print(f"\n[+] بدء فحص {count} يوزر مولّد عشوائياً...")
-    print(f"[+] بوت تيليجرام: {'✅ موجود' if BOT_TOKEN else '❌ غير موجود'}")
-    print(f"[+] معرف الشات: {'✅ موجود' if CHAT_ID else '❌ غير موجود'}")
-    print()
+    total_checked = 0
+    found_accounts = []
     
-    for i in range(count):
-        username = random_username()
+    # Send startup notification
+    send_telegram("🤖 <b>Instagram Scanner Started</b>\nScanning random usernames...")
+    
+    max_attempts = 50  # Limit for GitHub Actions (6 min timeout)
+    
+    for attempt in range(1, max_attempts + 1):
+        username = generate_username()
         total_checked += 1
-        
-        print(f"[{i+1}/{count}] 🕵️ فحص: @{username}")
+        log(f"\n[{attempt}/{max_attempts}] Checking: {username}")
         
         try:
-            # ننتظر شوي قبل كل طلب
-            time.sleep(random.uniform(3, 7))
+            result = check_instagram(username)
             
-            # جلب معلومات الحساب
-            user_info = get_user_info(username)
-            
-            if not user_info:
-                bad += 1
-                print(f"  ❌ لم يتم العثور على @{username}")
-                continue
-            
-            # خلاص وجدنا حساب - نبحث عن الإيميل
-            print(f"  ✅ حساب موجود! متابعين: {user_info.get('follower_count', 0):,}")
-            
-            email = search_email_for_username(username)
-            
-            if email:
-                hits += 1
-                good += 1
+            if result:
+                log(f"✅ FOUND: {username} - {result.get('full_name', 'N/A')}")
+                found_accounts.append(result)
                 
-                account_data = {
-                    'username': username,
-                    'full_name': user_info.get('full_name', 'N/A'),
-                    'email': email,
-                    'followers': user_info.get('follower_count', 0),
-                    'following': user_info.get('following_count', 0),
-                    'posts': user_info.get('media_count', 0),
-                    'is_private': user_info.get('is_private', False),
-                    'is_business': user_info.get('is_business', False),
-                    'biography': user_info.get('biography', 'فارغة'),
-                }
-                
-                found_accounts.append(account_data)
-                print(f"  📧 الإيميل: {email}")
-                
-                # إرسال إلى تيليجرام
-                if BOT_TOKEN and CHAT_ID:
-                    send_to_telegram(account_data)
-                    print(f"  📬 تم الإرسال إلى تيليجرام ✅")
+                # Send immediate Telegram notification
+                msg = (
+                    f"🎯 <b>Instagram Account Found!</b>\n\n"
+                    f"👤 <b>Username:</b> @{result['username']}\n"
+                    f"📛 <b>Name:</b> {result.get('full_name', 'N/A')}\n"
+                    f"📧 <b>Email:</b> {result.get('email', 'N/A')}\n"
+                    f"👥 <b>Followers:</b> {result.get('followers', 0):,}\n"
+                    f"🔒 <b>Private:</b> {'Yes' if result.get('is_private') else 'No'}\n"
+                    f"✅ <b>Verified:</b> {'Yes' if result.get('verified') else 'No'}\n"
+                    f"📝 <b>Bio:</b> {result.get('bio', 'N/A')[:100]}"
+                )
+                send_telegram(msg)
             else:
-                print(f"  📧 الإيميل: {username}@gmail.com (تقديري)")
-                hits += 1
-                good += 1
-                
-                account_data = {
-                    'username': username,
-                    'full_name': user_info.get('full_name', 'N/A'),
-                    'email': f"{username}@gmail.com",
-                    'followers': user_info.get('follower_count', 0),
-                    'following': user_info.get('following_count', 0),
-                    'posts': user_info.get('media_count', 0),
-                    'is_private': user_info.get('is_private', False),
-                    'biography': user_info.get('biography', ''),
-                }
-                
-                found_accounts.append(account_data)
-                
-                if BOT_TOKEN and CHAT_ID:
-                    send_to_telegram(account_data)
-                    print(f"  📬 تم الإرسال إلى تيليجرام ✅")
-            
+                log(f"❌ Not found or API blocked: {username}")
+        
         except Exception as e:
-            bad += 1
-            print(f"  ⚠️ خطأ: {str(e)[:60]}")
-            time.sleep(random.uniform(5, 10))
+            log(f"⚠️ Unexpected error on {username}: {e}")
+        
+        # Small delay to avoid rate limiting
+        time.sleep(0.5)
     
-    # النتائج النهائية
-    print(f"\n{'='*50}")
-    print(f"✅ تم الانتهاء من فحص {count} يوزر!")
-    print(f"📊 الإحصائيات:")
-    print(f"   إجمالي: {total_checked}")
-    print(f"   ✅ وجد: {hits}")
-    print(f"   ❌ غير موجود: {bad}")
-    print(f"💾 تم حفظ النتائج في found_accounts.json")
+    log("=" * 50)
+    log(f"SCAN COMPLETE: Checked {total_checked} usernames")
+    log(f"Found: {len(found_accounts)} accounts")
+    log("=" * 50)
     
-    # حفظ النتائج
+    # Save found accounts
     if found_accounts:
-        with open('found_accounts.json', 'w', encoding='utf-8') as f:
-            json.dump(found_accounts, f, indent=2, ensure_ascii=False)
+        with open("found_accounts.json", "w") as f:
+            json.dump(found_accounts, f, indent=2)
+        log(f"Saved {len(found_accounts)} accounts to found_accounts.json")
+        
+        summary = f"📊 <b>Scan Complete</b>\nChecked: {total_checked}\nFound: {len(found_accounts)} accounts"
+        send_telegram(summary)
+    else:
+        log("No accounts found to save")
+        send_telegram(f"📊 <b>Scan Complete</b>\nChecked: {total_checked} usernames\nFound: 0 accounts 😕\n\nCheck if Instagram API is blocking requests.")
+    
+    # Also output for GitHub Actions
+    with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+        f.write(f"found_count={len(found_accounts)}\n")
 
-# ========= MAIN =========
-if __name__ == '__main__':
-    print("""
-╔══════════════════════════════════╗
-║   Instagram Account Finder       ║
-║   يولد يوزرات عشوائياً           ║
-║   ويرسل النتائج إلى تيليجرام     ║
-╚══════════════════════════════════╝
-    """)
-    
-    # عدد اليوزرات اللي تبي تفحصها
-    SCAN_COUNT = 15  # ← غيّر الرقم حسب ما تبي
-    
-    scan_random_usernames(SCAN_COUNT)
+if __name__ == "__main__":
+    main()
