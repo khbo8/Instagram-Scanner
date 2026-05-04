@@ -1,34 +1,38 @@
 name: Instagram Scanner
 
 on:
+  workflow_dispatch:   # يدوي
   schedule:
-    - cron: '0 */6 * * *'   # كل 6 ساعات
-  workflow_dispatch:          # تشغيل يدوي
+    - cron: '0 */6 * * *'  # كل 6 ساعات
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          
-      - name: Run scanner
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          python insta_scanner.py
-          
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: found-accounts
-          path: found_accounts.json
+    - name: Checkout repo
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests
+    
+    - name: Run Instagram Scanner
+      id: scan
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.CHAT_ID }}
+      run: python insta_scanner.py
+    
+    - name: Upload found accounts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: found-accounts
+        path: found_accounts.json
+        if-no-files-found: warn
