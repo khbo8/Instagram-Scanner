@@ -54,21 +54,13 @@ INTERESTS = [
 def random_username():
     """توليد يوزر انستغرام عشوائي واقعي"""
     patterns = [
-        # اسم + أرقام
         lambda: random.choice(FIRST_NAMES) + str(random.randint(1, 9999)),
-        # اسم_اسم
         lambda: random.choice(FIRST_NAMES) + "_" + random.choice(LAST_NAMES),
-        # اسم + اهتمام
         lambda: random.choice(FIRST_NAMES) + "." + random.choice(INTERESTS),
-        # نقطة بين الأسماء
         lambda: random.choice(FIRST_NAMES) + "." + random.choice(LAST_NAMES),
-        # كلها أحرف صغيرة
         lambda: ''.join(random.choices(string.ascii_lowercase, k=random.randint(6, 12))),
-        # أحرف + أرقام
         lambda: ''.join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(7, 11))),
-        # اسم + 3 أرقام
         lambda: random.choice(FIRST_NAMES) + str(random.randint(100, 999)),
-        # تحت سطر + كلمة
         lambda: "_" + random.choice(INTERESTS) + str(random.randint(10, 99)),
     ]
     return random.choice(patterns)()
@@ -160,13 +152,11 @@ def search_email_for_username(username):
         response = requests.post(url, data=payload, headers=headers, timeout=15)
         
         if response.status_code == 200 and username.lower() in response.text.lower():
-            # نبحث عن إيميل في الرد
             email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
             emails = re.findall(email_pattern, response.text)
             for email in emails:
                 if 'gmail' in email or 'yahoo' in email or 'outlook' in email:
                     return email
-            # إذا ما لقينا إيميل صريح، نرجّع اليوزر كإيميل
             return f"{username}@gmail.com"
         
         return None
@@ -205,7 +195,7 @@ def send_to_telegram(account_info):
         print(f"  ⚠️ فشل الإرسال إلى تيليجرام: {e}")
         return False
 
-def scan_random_usernames(count=20):
+def scan_random_usernames(count=100):
     """فحص يوزرات عشوائية مولّدة"""
     global hits, good, bad, total_checked, found_accounts
     
@@ -221,10 +211,8 @@ def scan_random_usernames(count=20):
         print(f"[{i+1}/{count}] 🕵️ فحص: @{username}")
         
         try:
-            # ننتظر شوي قبل كل طلب
             time.sleep(random.uniform(3, 7))
             
-            # جلب معلومات الحساب
             user_info = get_user_info(username)
             
             if not user_info:
@@ -232,7 +220,6 @@ def scan_random_usernames(count=20):
                 print(f"  ❌ لم يتم العثور على @{username}")
                 continue
             
-            # خلاص وجدنا حساب - نبحث عن الإيميل
             print(f"  ✅ حساب موجود! متابعين: {user_info.get('follower_count', 0):,}")
             
             email = search_email_for_username(username)
@@ -256,7 +243,6 @@ def scan_random_usernames(count=20):
                 found_accounts.append(account_data)
                 print(f"  📧 الإيميل: {email}")
                 
-                # إرسال إلى تيليجرام
                 if BOT_TOKEN and CHAT_ID:
                     send_to_telegram(account_data)
                     print(f"  📬 تم الإرسال إلى تيليجرام ✅")
@@ -300,6 +286,11 @@ def scan_random_usernames(count=20):
     if found_accounts:
         with open('found_accounts.json', 'w', encoding='utf-8') as f:
             json.dump(found_accounts, f, indent=2, ensure_ascii=False)
+    
+    # تصدير العدد لـ GitHub Actions
+    with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+        f.write(f"found_count={len(found_accounts)}\n")
+        f.write(f"total_checked={total_checked}\n")
 
 # ========= MAIN =========
 if __name__ == '__main__':
@@ -311,7 +302,5 @@ if __name__ == '__main__':
 ╚══════════════════════════════════╝
     """)
     
-    # عدد اليوزرات اللي تبي تفحصها
-    SCAN_COUNT = 100  # ← غيّر الرقم حسب ما تبي
-    
+    SCAN_COUNT = 100  # 100 حساب
     scan_random_usernames(SCAN_COUNT)
