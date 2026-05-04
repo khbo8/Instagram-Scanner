@@ -163,6 +163,61 @@ def search_email_for_username(username):
     except:
         return None
 
+def check_yopmail(email):
+    """
+    التحقق من وجود صندوق بريد Yopmail
+    يرجع:
+      'available' - الإيميل متاح (ما فيه بريد)
+      'exists'   - الإيميل مستخدم (فيه بريد)
+      'error'    - فشل الاتصال
+    """
+    try:
+        if '@' in email:
+            local_part = email.split('@')[0]
+        else:
+            local_part = email
+        
+        # طريقة 1: فتح صندوق البريد في Yopmail
+        url = f"https://yopmail.com/en/wm"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        
+        # نجيب CSRF token أول
+        sess = requests.Session()
+        r1 = sess.get("https://yopmail.com", headers=headers, timeout=10)
+        
+        # نحاول نفتح صندوق البريد
+        check_url = f"https://yopmail.com/en/checkmail?login={local_part}&domain=yopmail.com"
+        r2 = sess.get(check_url, headers=headers, timeout=10)
+        
+        # الطريقة: ندخل على صفحة البريد ونشوف إذا فيه "no-mes" أو "mbtable"
+        inbox_url = f"https://yopmail.com/en/inbox?login={local_part}&p=1&d=&ctrl=&scrl=&spam=true&ywin=inbox"
+        r3 = sess.get(inbox_url, headers=headers, timeout=10)
+        
+        html = r3.text
+        
+        # إذا فيه "no-mes" معناه ما فيه رسائل - الإيميل متاح (جديد)
+        # إذا فيه "mbtable" أو رسائل موجودة - الإيميل مستخدم
+        if 'no-mes' in html and 'aucun message' in html.lower():
+            return 'available'
+        elif 'mbtable' in html or 'Messages courts' in html or 'effacer' in html:
+            return 'exists'
+        else:
+            # طريقة احتياطية: نحاول ندخل مباشرة
+            direct_url = f"https://yopmail.com/?login={local_part}&domain=yopmail.com"
+            r4 = sess.get(direct_url, headers=headers, timeout=10)
+            html2 = r4.text
+            if 'no-mes' in html2 or 'aucun message' in html2:
+                return 'available'
+            else:
+                return 'exists'
+                
+    except Exception as e:
+        print(f"    ⚠️ Yopmail check error: {e}")
+        return 'error'
+
 def send_to_telegram(account_info):
     """إرسال النتائج إلى تيليجرام"""
     if not BOT_TOKEN or not CHAT_ID:
@@ -170,12 +225,27 @@ def send_to_telegram(account_info):
         return False
     
     try:
+        yopmail_status = account_info.get('yopmail_status', 'غير معروف')
+        if yopmail_status == 'available':
+            status_icon = '🟢'
+            status_text = 'متاح ✅'
+        elif yopmail_status == 'exists':
+            status_icon = '🔴'
+            status_text = 'مستخدم (فيه رسائل)'
+        elif yopmail_status == 'error':
+            status_icon = '⚪'
+            status_text = 'تعذر التحقق'
+        else:
+            status_icon = '⚪'
+            status_text = 'غير معروف'
+        
         msg = f"""
 📱 **حساب انستغرام موجود!**
 ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
 **اليوزرنيم:** @{account_info.get('username', '')}
 **الاسم:** {account_info.get('full_name', 'غير معروف')}
-**الإيميل:** {account_info.get('email', 'غير معروف')}
+**الإيميل:** @yopmail.com/{account_info.get('email', 'غير معروف')}
+**حالة Yopmail:** {status_icon} {status_text}
 **المتابعين:** {account_info.get('followers', 0):,}
 **يتابع:** {account_info.get('following', 0):,}
 **المنشورات:** {account_info.get('posts', 0):,}
@@ -183,6 +253,7 @@ def send_to_telegram(account_info):
 **السيرة:** {account_info.get('biography', 'فارغة')[:100]}
 ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
 🔗 https://www.instagram.com/{account_info.get('username', '')}
+🌐 https://yopmail.com?login={account_info.get('email', '').split('@')[0]}
 """
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, json={
@@ -202,6 +273,7 @@ def scan_random_usernames(count=100):
     print(f"\n[+] بدء فحص {count} يوزر مولّد عشوائياً...")
     print(f"[+] بوت تيليجرام: {'✅ موجود' if BOT_TOKEN else '❌ غير موجود'}")
     print(f"[+] معرف الشات: {'✅ موجود' if CHAT_ID else '❌ غير موجود'}")
+    print(f"[+] فحص Yopmail: ✅ مفعل (نتأكد إذا الإيميل متاح)")
     print()
     
     for i in range(count):
@@ -227,11 +299,27 @@ def scan_random_usernames(count=100):
             if email:
                 hits += 1
                 good += 1
+                print(f"  📧 الإيميل المستخرج: {email}")
+                
+                # نحول الإيميل إلى Yopmail
+                yopmail_email = f"{username}@yopmail.com"
+                print(f"  📧 Yopmail: {yopmail_email}")
+                
+                # نتحقق من Yopmail
+                print(f"  🔍 جاري التحقق من Yopmail...")
+                yopmail_status = check_yopmail(username)
+                status_map = {
+                    'available': '🟢 متاح ✅',
+                    'exists': '🔴 مستخدم (فيه رسائل)',
+                    'error': '⚪ تعذر التحقق'
+                }
+                print(f"  حالة Yopmail: {status_map.get(yopmail_status, 'غير معروف')}")
                 
                 account_data = {
                     'username': username,
                     'full_name': user_info.get('full_name', 'N/A'),
-                    'email': email,
+                    'email': yopmail_email,
+                    'yopmail_status': yopmail_status,
                     'followers': user_info.get('follower_count', 0),
                     'following': user_info.get('following_count', 0),
                     'posts': user_info.get('media_count', 0),
@@ -241,20 +329,30 @@ def scan_random_usernames(count=100):
                 }
                 
                 found_accounts.append(account_data)
-                print(f"  📧 الإيميل: {email}")
                 
                 if BOT_TOKEN and CHAT_ID:
                     send_to_telegram(account_data)
                     print(f"  📬 تم الإرسال إلى تيليجرام ✅")
             else:
-                print(f"  📧 الإيميل: {username}@gmail.com (تقديري)")
+                # حتى لو ما استخرجنا إيميل، نستخدم Yopmail
+                print(f"  📧 الإيميل: {username}@yopmail.com (Yopmail)")
                 hits += 1
                 good += 1
+                
+                print(f"  🔍 جاري التحقق من Yopmail...")
+                yopmail_status = check_yopmail(username)
+                status_map = {
+                    'available': '🟢 متاح ✅',
+                    'exists': '🔴 مستخدم (فيه رسائل)',
+                    'error': '⚪ تعذر التحقق'
+                }
+                print(f"  حالة Yopmail: {status_map.get(yopmail_status, 'غير معروف')}")
                 
                 account_data = {
                     'username': username,
                     'full_name': user_info.get('full_name', 'N/A'),
-                    'email': f"{username}@gmail.com",
+                    'email': f"{username}@yopmail.com",
+                    'yopmail_status': yopmail_status,
                     'followers': user_info.get('follower_count', 0),
                     'following': user_info.get('following_count', 0),
                     'posts': user_info.get('media_count', 0),
@@ -282,6 +380,10 @@ def scan_random_usernames(count=100):
     print(f"   ❌ غير موجود: {bad}")
     print(f"💾 تم حفظ النتائج في found_accounts.json")
     
+    # نحسب كم Yopmail متاح
+    available_yopmail = sum(1 for a in found_accounts if a.get('yopmail_status') == 'available')
+    print(f"   🟢 Yopmail متاح: {available_yopmail}")
+    
     # حفظ النتائج
     if found_accounts:
         with open('found_accounts.json', 'w', encoding='utf-8') as f:
@@ -291,15 +393,17 @@ def scan_random_usernames(count=100):
     with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
         f.write(f"found_count={len(found_accounts)}\n")
         f.write(f"total_checked={total_checked}\n")
+        f.write(f"yopmail_available={available_yopmail}\n")
 
 # ========= MAIN =========
 if __name__ == '__main__':
     print("""
-╔══════════════════════════════════╗
-║   Instagram Account Finder       ║
-║   يولد يوزرات عشوائياً           ║
-║   ويرسل النتائج إلى تيليجرام     ║
-╚══════════════════════════════════╝
+╔═══════════════════════════════════════╗
+║   Instagram Account Finder            ║
+║   يولد يوزرات عشوائياً                ║
+║   ويرسل النتائج إلى تيليجرام          ║
+║   + فحص Yopmail (متاح/مستخدم)         ║
+╚═══════════════════════════════════════╝
     """)
     
     SCAN_COUNT = 100  # 100 حساب
